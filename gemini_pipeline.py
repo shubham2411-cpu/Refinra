@@ -1,8 +1,8 @@
 from dotenv import load_dotenv
 from google import genai
-import time
+from google.genai import types
+from pydantic import BaseModel
 import json
-import re
 import math
 from dataclasses import dataclass
 
@@ -13,7 +13,42 @@ from dataclasses import dataclass
 
 load_dotenv()
 
-client = genai.Client()
+MODEL_NAME = "gemini-3.8-flash"
+
+
+# Retry only temporary server/network conditions.
+# 429 is intentionally excluded because it represents
+# quota/rate-limit conditions that should be surfaced immediately.
+
+RETRY_OPTIONS = types.HttpRetryOptions(
+    attempts=3,
+    initial_delay=2.0,
+    max_delay=8.0,
+    http_status_codes=[
+        408,
+        500,
+        502,
+        503,
+        504
+    ]
+)
+
+
+client = genai.Client(
+    http_options=types.HttpOptions(
+        retry_options=RETRY_OPTIONS
+    )
+)
+
+
+# ============================================================
+# STRUCTURED VERIFIER SCHEMA
+# ============================================================
+
+class VerifierSchema(BaseModel):
+    verdict: str
+    confidence: float
+    explanation: str
 
 
 # ============================================================
@@ -33,44 +68,12 @@ class VerifierResult:
 
 def ask_gemini(prompt):
 
-    for attempt in range(3):
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt
+    )
 
-        try:
-
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt
-            )
-
-            return response.text
-
-        except Exception as e:
-
-            error_text = str(e)
-            normalized_error = error_text.upper()
-
-            if (
-                "429" in error_text
-                or "RESOURCE_EXHAUSTED" in normalized_error
-                or "RATE LIMIT" in normalized_error
-                or "RATE-LIMIT" in normalized_error
-            ):
-                raise
-
-            if "503" in error_text:
-
-                if attempt < 2:
-
-                    print(
-                        f"Gemini temporarily unavailable. "
-                        f"Retrying... ({attempt + 1}/3)"
-                    )
-
-                    time.sleep(2 ** (attempt + 1))
-
-                    continue
-
-            raise
+    return response.text
 
 
 # ============================================================
@@ -96,20 +99,19 @@ Provide a complete answer.
 
 
 # ============================================================
-# VERIFIER
+# VERIFIER VALIDATION
 # ============================================================
-
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 
 def _parse_verifier_output(text):
     """
-    Parse the Verifier's raw text into a VerifierResult.
+    Validate the Verifier's structured JSON output.
 
-    Expects a single JSON object with keys:
-        verdict, confidence, explanation
+    Expects exactly:
+        verdict
+        confidence
+        explanation
 
-    Raises ValueError with a descriptive message on any failure.
+    Raises ValueError if validation fails.
     """
 
     if text is None:
@@ -118,25 +120,15 @@ def _parse_verifier_output(text):
             "Verifier returned no text."
         )
 
-    match = _JSON_OBJECT_RE.search(text)
-
-    if not match:
-
-        raise ValueError(
-            f"Verifier did not return a JSON object. Raw output: {text!r}"
-        )
-
-    raw_json = match.group(0)
-
     try:
 
-        obj = json.loads(raw_json)
+        obj = json.loads(text)
 
     except json.JSONDecodeError as e:
 
         raise ValueError(
             f"Verifier output was not valid JSON: "
-            f"{raw_json!r} ({e})"
+            f"{text!r} ({e})"
         )
 
     if not isinstance(obj, dict):
@@ -146,7 +138,9 @@ def _parse_verifier_output(text):
             f"got {type(obj).__name__}."
         )
 
-    # ---- exact key set: verdict, confidence, explanation ----
+    # --------------------------------------------------------
+    # Exact key set
+    # --------------------------------------------------------
 
     required_keys = (
         "verdict",
@@ -155,8 +149,9 @@ def _parse_verifier_output(text):
     )
 
     missing_keys = [
-        k for k in required_keys
-        if k not in obj
+        key
+        for key in required_keys
+        if key not in obj
     ]
 
     if missing_keys:
@@ -167,8 +162,9 @@ def _parse_verifier_output(text):
         )
 
     extra_keys = [
-        k for k in obj
-        if k not in required_keys
+        key
+        for key in obj
+        if key not in required_keys
     ]
 
     if extra_keys:
@@ -179,7 +175,9 @@ def _parse_verifier_output(text):
             f"{list(required_keys)}."
         )
 
-    # ---- verdict: exactly PASS or FAIL ----
+    # --------------------------------------------------------
+    # Verdict validation
+    # --------------------------------------------------------
 
     raw_verdict = obj.get("verdict")
 
@@ -195,15 +193,15 @@ def _parse_verifier_output(text):
     if verdict not in ("PASS", "FAIL"):
 
         raise ValueError(
-            f"Verifier 'verdict' must be exactly 'PASS' or 'FAIL', "
-            f"got {raw_verdict!r}."
+            f"Verifier 'verdict' must be exactly "
+            f"'PASS' or 'FAIL', got {raw_verdict!r}."
         )
 
-    # ---- confidence: numeric, strictly in [0.0, 1.0] ----
+    # --------------------------------------------------------
+    # Confidence validation
+    # --------------------------------------------------------
 
     raw_confidence = obj.get("confidence")
-
-    # bool is a subclass of int in Python; reject it explicitly.
 
     if isinstance(raw_confidence, bool) or not isinstance(
         raw_confidence,
@@ -227,11 +225,13 @@ def _parse_verifier_output(text):
     if confidence < 0.0 or confidence > 1.0:
 
         raise ValueError(
-            f"Verifier 'confidence' must be between 0.0 and 1.0 "
-            f"inclusive, got {confidence}."
+            f"Verifier 'confidence' must be between "
+            f"0.0 and 1.0 inclusive, got {confidence}."
         )
 
-    # ---- explanation: non-empty string ----
+    # --------------------------------------------------------
+    # Explanation validation
+    # --------------------------------------------------------
 
     raw_explanation = obj.get("explanation")
 
@@ -257,48 +257,67 @@ def _parse_verifier_output(text):
     )
 
 
+# ============================================================
+# VERIFIER
+# ============================================================
+
 def verify(question, solver_answer):
 
-    raw_output = ask_gemini(f"""
+    prompt = f"""
 You are the Verifier in an AI verification system.
 
 Independently check the Solver's answer.
 
-Respond with a single JSON object and nothing else, using exactly
-these three fields:
+Determine whether the Solver's answer is correct.
 
-  "verdict":     the string "PASS" or the string "FAIL"
-  "confidence":  a number between 0.0 and 1.0 (inclusive) expressing
-                 how confident you are in the verdict
-  "explanation": one short sentence (under 30 words) explaining the verdict
+Rules:
 
-Do not include any prose, markdown, or code fences outside the JSON object.
+- verdict must be PASS if the Solver's answer is correct.
+- verdict must be FAIL if the Solver's answer contains a
+  meaningful error, incorrect calculation, unsupported assumption,
+  missing required answer, or other important problem.
+- confidence must be a number from 0.0 to 1.0 representing
+  confidence in your verdict.
+- explanation must be one short sentence under 30 words.
 
 User question:
 {question}
 
 Solver's answer:
 {solver_answer}
-""")
+"""
 
     try:
+
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": VerifierSchema,
+            }
+        )
+
+        raw_output = response.text
+
+        # ----------------------------------------------------
+        # Server-side validation remains as a second layer.
+        # ----------------------------------------------------
 
         return _parse_verifier_output(raw_output)
 
     except ValueError as e:
 
         raise RuntimeError(
-            f"Failed to parse Verifier output into structured result: {e}"
+            f"Failed to validate Verifier output: {e}"
         ) from e
 
 
 # ============================================================
-# CRITIC
+# FORMAT VERIFIER RESULT
 # ============================================================
 
 def _format_verifier(verification):
-
-    """Render a VerifierResult as a labeled block for downstream prompts."""
 
     return (
         f"Verdict: {verification.verdict}\n"
@@ -306,6 +325,10 @@ def _format_verifier(verification):
         f"Explanation: {verification.explanation}"
     )
 
+
+# ============================================================
+# CRITIC
+# ============================================================
 
 def criticize(question, solver_answer, verification):
 
@@ -379,7 +402,9 @@ Return the final answer clearly and accurately.
 
 def run_gemini_pipeline(question):
 
+    # --------------------------------------------------------
     # Solver
+    # --------------------------------------------------------
 
     print("\n--- SOLVER ---")
 
@@ -387,8 +412,9 @@ def run_gemini_pipeline(question):
 
     print(solver_answer)
 
-
+    # --------------------------------------------------------
     # Verifier
+    # --------------------------------------------------------
 
     print("\n--- VERIFIER ---")
 
@@ -401,8 +427,9 @@ def run_gemini_pipeline(question):
     print(f"Confidence:  {verification.confidence:.2f}")
     print(f"Explanation: {verification.explanation}")
 
-
+    # --------------------------------------------------------
     # Critic
+    # --------------------------------------------------------
 
     print("\n--- CRITIC ---")
 
@@ -414,8 +441,9 @@ def run_gemini_pipeline(question):
 
     print(critique)
 
-
+    # --------------------------------------------------------
     # Finalizer
+    # --------------------------------------------------------
 
     print("\n--- FINAL ANSWER ---")
 
@@ -428,10 +456,9 @@ def run_gemini_pipeline(question):
 
     print(final_answer)
 
-
-    # Return same structure as Mock Mode.
-    # "verifier" stays a human-readable string for API compatibility:
-    # it is the formatted VerifierResult.
+    # --------------------------------------------------------
+    # API-compatible response
+    # --------------------------------------------------------
 
     return {
         "solver": solver_answer,

@@ -77,18 +77,26 @@ def verify(question, solver_answer):
         if str(correct_answer) in solver_answer:
 
             return (
-                f"PASS — The Solver's answer is correct. "
+                f"Verdict: PASS\n"
+                f"Confidence: 1.00\n"
+                f"Explanation: The Solver's answer is correct. "
                 f"{a} × {b} = {correct_answer}."
             )
 
         else:
 
             return (
-                f"FAIL — The Solver's answer is incorrect. "
-                f"The correct answer is {a} × {b} = {correct_answer}."
+                f"Verdict: FAIL\n"
+                f"Confidence: 1.00\n"
+                f"Explanation: The Solver's answer is incorrect. "
+                f"The correct result is {a} × {b} = {correct_answer}."
             )
 
-    return "Unable to verify this question yet."
+    return (
+        "Verdict: FAIL\n"
+        "Confidence: 0.00\n"
+        "Explanation: Unable to verify this question yet."
+    )
 
 
 # ============================================================
@@ -97,7 +105,7 @@ def verify(question, solver_answer):
 
 def criticize(question, solver_answer, verification):
 
-    if "FAIL" in verification:
+    if "Verdict: FAIL" in verification:
 
         if "Assuming" in solver_answer:
 
@@ -129,7 +137,7 @@ def criticize(question, solver_answer, verification):
 
 def finalize(question, solver_answer, verification, critique):
 
-    if "FAIL" in verification:
+    if "Verdict: FAIL" in verification:
 
         correct_answer = (
             verification
@@ -187,18 +195,18 @@ def run_mock_pipeline(question, scenario="wrong_calculation"):
 def run_tests():
 
     test_cases = [
-        ("16*25", "correct"),
-        ("17*24", "wrong_calculation"),
-        ("100*7", "incomplete"),
-        ("12*12", "wrong_assumption"),
-        ("25*4", "wrong_calculation")
+        ("16*25", "correct", "400", "PASS"),
+        ("17*24", "wrong_calculation", "408", "FAIL"),
+        ("100*7", "incomplete", "700", "FAIL"),
+        ("12*12", "wrong_assumption", "144", "FAIL"),
+        ("25*4", "wrong_calculation", "100", "FAIL")
     ]
 
     print("\n==============================")
     print("       RUNNING TESTS")
     print("==============================")
 
-    for question, scenario in test_cases:
+    for question, scenario, expected_answer, expected_verdict in test_cases:
 
         result = run_mock_pipeline(
             question,
@@ -213,8 +221,22 @@ def run_tests():
         print(f"Critic:   {result['critic']}")
         print(f"Final:    {result['final']}")
 
+        # ----------------------------------------------------
+        # Assertions
+        # ----------------------------------------------------
+
+        assert expected_answer in result["final"], (
+            f"Final answer test failed for {question}. "
+            f"Expected {expected_answer}, got: {result['final']}"
+        )
+
+        assert expected_verdict in result["verifier"], (
+            f"Verifier test failed for {question}. "
+            f"Expected {expected_verdict}, got: {result['verifier']}"
+        )
+
     print("\n==============================")
-    print("       TESTS COMPLETE")
+    print("   ALL TESTS PASSED")
     print("==============================")
 
 
@@ -233,6 +255,9 @@ if __name__ == "__main__":
         question = input("\nEnter your question: ")
 
         result = run_pipeline(question)
+
+        print("\nFinal Answer:")
+        print(result)
 
     else:
 
