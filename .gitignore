@@ -11,3 +11,9 @@ __pycache__/
 
 .DS_Store
 Thumbs.db
+
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.log
