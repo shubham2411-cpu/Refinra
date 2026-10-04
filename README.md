@@ -1,14 +1,14 @@
 # Refinra
 
-### Multi-Agent AI Verification & Refinement System
+### Multi-Stage AI Verification & Refinement System
 
-Refinra is a multi-agent AI system designed to improve the reliability of AI-generated answers by passing a question through multiple verification and refinement stages.
+Refinra is an experimental AI verification workflow that passes a question through multiple reasoning and review stages before returning a refined response.
 
 Instead of relying on a single AI response, Refinra uses four sequential roles:
 
 **Solver → Verifier → Critic → Finalizer**
 
-The system is designed to identify mistakes, challenge verification results, and produce a refined final answer.
+The four roles currently use the same configured Gemini model, with separate role-specific prompts and responsibilities. They are sequential stages in one verification pipeline rather than four independently trained models.
 
 ---
 
@@ -16,36 +16,20 @@ The system is designed to identify mistakes, challenge verification results, and
 
 ```text
 User Question
-      │
-      ▼
-┌─────────────┐
-│   Solver    │
-│ Generates   │
-│   answer    │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Verifier   │
-│ Checks the  │
-│   answer    │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Critic    │
-│ Challenges  │
-│ verification│
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Finalizer  │
-│ Produces the│
-│ final answer│
-└──────┬──────┘
-       │
-       ▼
+      |
+      v
+   Solver
+      |
+      v
+  Verifier
+      |
+      v
+   Critic
+      |
+      v
+  Finalizer
+      |
+      v
  Final Answer
 ```
 
@@ -82,20 +66,22 @@ Uses the available information from the previous stages to produce the final res
 
 ```text
 Frontend
-HTML / CSS / JavaScript
-        │
-        ▼
+   |
+   v
 FastAPI Backend
-        │
-        ▼
+   |
+   v
 Python Pipeline
-        │
-        ├── Solver
-        ├── Verifier
-        ├── Critic
-        └── Finalizer
-        │
-        ▼
+   |
+   +--> Solver
+   |
+   +--> Verifier
+   |
+   +--> Critic
+   |
+   +--> Finalizer
+   |
+   v
 Gemini API
 ```
 
@@ -119,7 +105,7 @@ Gemini API
 ## Project Structure
 
 ```text
-AI-Double-Check/
+Refinra/
 │
 ├── frontend/
 │   └── index.html
@@ -127,11 +113,9 @@ AI-Double-Check/
 ├── api.py
 ├── pipeline.py
 ├── gemini_pipeline.py
-├── solver.py
-├── verifier.py
-├── test_gemini.py
-│
-├── .env
+├── scripts/
+│   └── check_gemini.py
+├── requirements.txt
 ├── .gitignore
 └── README.md
 ```
@@ -168,17 +152,7 @@ Request:
 }
 ```
 
-The request is processed through:
-
-```text
-Solver
-   ↓
-Verifier
-   ↓
-Critic
-   ↓
-Finalizer
-```
+The request is processed through Solver, Verifier, Critic, and Finalizer in sequence.
 
 ---
 
@@ -187,8 +161,8 @@ Finalizer
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/shubham2411-cpu/AI-Double-Check.git
-cd AI-Double-Check
+git clone https://github.com/shubham2411-cpu/Refinra.git
+cd Refinra
 ```
 
 ### 2. Create a virtual environment
@@ -199,21 +173,33 @@ python -m venv venv
 
 ### 3. Activate the virtual environment
 
-Windows CMD:
+Windows Command Prompt:
 
 ```cmd
 venv\Scripts\activate.bat
 ```
 
+Windows PowerShell:
+
+```powershell
+venv\Scripts\Activate.ps1
+```
+
+macOS/Linux:
+
+```bash
+source venv/bin/activate
+```
+
 ### 4. Install dependencies
 
 ```bash
-pip install fastapi uvicorn google-genai python-dotenv
+pip install -r requirements.txt
 ```
 
 ### 5. Configure the Gemini API key
 
-Create a `.env` file:
+Create a local `.env` file:
 
 ```env
 GEMINI_API_KEY=your_api_key_here
@@ -239,35 +225,32 @@ http://127.0.0.1:8000/app/
 
 Refinra includes handling for Gemini API rate-limit errors.
 
-When the Gemini API returns HTTP 429 / `RESOURCE_EXHAUSTED`, the backend returns a structured error instead of allowing the application to fail unexpectedly.
-
-Example:
-
-```json
-{
-  "error": "gemini_rate_limit_exceeded",
-  "detail": "Gemini API rate limit reached."
-}
-```
+When the Gemini API returns HTTP 429 / `RESOURCE_EXHAUSTED`, the backend returns a structured rate-limit error. Other pipeline failures return a generic verification error rather than exposing internal details.
 
 ---
 
 ## Testing
 
-The project includes a mock pipeline for testing the verification workflow without relying on the Gemini API.
-
-The mock tests cover scenarios such as:
+Refinra includes a deterministic mock pipeline that exercises the verification workflow without Gemini API calls. It covers:
 
 - Correct answers
 - Incorrect calculations
 - Incomplete answers
 - Incorrect assumptions
 
-This allows the core orchestration logic to be tested even when the external API is unavailable.
+These checks validate deterministic pipeline and orchestration behavior. They do **not** prove that Gemini, the verifier, or Refinra is more accurate than a single AI model.
+
+`scripts/check_gemini.py` is a separate, manual Gemini connectivity smoke check. Run it explicitly from the project root only when a configured API key is available:
+
+```bash
+python scripts/check_gemini.py
+```
+
+It is not part of normal application startup or automated test discovery.
 
 ---
 
-## Important Limitation
+## Important Limitations
 
 Refinra is a verification and refinement system, not a guarantee of factual correctness.
 
@@ -279,17 +262,24 @@ The confidence score generated by the Verifier is a model-generated assessment a
 
 ---
 
+## Local-Only Scope
+
+The GitHub repository is public, but the application is intentionally designed to run locally.
+
+Public deployment would require rate limiting, abuse prevention, authentication, quota and cost management, monitoring, logging, and other production controls. Those concerns are outside the current project's main objective. Public deployment may be considered in the future.
+
+---
+
 ## Current Scope
 
 Refinra currently focuses on:
 
-- Multi-agent answer verification
+- Multi-stage answer verification
 - Sequential AI reasoning
 - Verification and criticism
 - API integration
 - Backend/frontend communication
-- Error handling
-- Local deployment
+- Local development
 
 The current version does **not** include:
 
@@ -303,26 +293,8 @@ The current version does **not** include:
 - Custom model training
 - LangChain/LangGraph
 
-These may be considered separately in future versions.
-
----
-
-## Future Improvements
-
-Possible future improvements include:
-
-- Support for multiple AI models
-- Better verification strategies
-- Persistent conversation history
-- Web-based fact verification
-- RAG-based verification
-- More detailed evaluation benchmarks
-- Performance optimization
-- Production deployment
-- Authentication and user accounts
-
 ---
 
 ## Project Goal
 
-The goal of Refinra is to explore whether a structured multi-agent workflow can make AI-generated answers more reliable by requiring answers to pass through multiple stages of solving, verification, criticism, and refinement.
+The goal of Refinra is to explore whether a structured multi-stage workflow can help surface weaknesses in AI-generated answers before producing a final response.
