@@ -326,3 +326,9 @@ Possible future improvements include:
 ## Project Goal
 
 The goal of Refinra is to explore whether a structured multi-agent workflow can make AI-generated answers more reliable by requiring answers to pass through multiple stages of solving, verification, criticism, and refinement.
+
+---
+
+## Preview
+
+![Refinra Preview](docs/refinra-preview.png)
